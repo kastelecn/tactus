@@ -9,6 +9,12 @@ from tactus.suites.base import (
     EcflowSuiteTriggers,
     SuiteDefinition,
 )
+from tactus.suites.suite_extensions import (
+    ComponentContext,
+    ExtensionPoint,
+    add_components,
+    extend_trigger,
+)
 from tactus.suites.tactus_suite_components import (
     CompilationFamily,
     MirrorSuite,
@@ -171,6 +177,20 @@ class TactusSuiteDefinition(SuiteDefinition):
         if last_time_dependent_part is not None:
             # Update triggers for final cleaning node
             final_cleaning_trigger.append(last_time_dependent_part)
+
+        added = add_components(
+            ExtensionPoint.END_OF_SUITE,
+            self.suite,
+            ComponentContext(
+                config,
+                self.task_settings,
+                input_template,
+                self.ecf_files,
+                trigger=list(final_cleaning_trigger) or None,
+                ecf_files_remotely=self.ecf_files_remotely,
+            ),
+        )
+        final_cleaning_trigger = extend_trigger(final_cleaning_trigger, added)
 
         if config["reference_checker.check"] or config["reference_checker.generate"]:
             EcflowSuiteTask(

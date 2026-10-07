@@ -1,30 +1,4 @@
-"""Optional components that can be plugged into extension points of a suite.
-
-Suite families call :func:`add_components` at the extension points listed in
-:class:`ExtensionPoint`. Every component registered for that extension point,
-whose ``is_active(config)`` returns True, then adds its nodes to the suite.
-
-Components are registered with the :func:`register_component` class decorator,
-typically by a plugin in a module of its ``suites`` package, which tactus
-imports when discovering suites.
-
-Example:
-    A plugin adding a task after all members of each cycle::
-
-        from tactus.suites.suite_extensions import (
-            ExtensionPoint,
-            TaskComponent,
-            register_component,
-        )
-
-        @register_component
-        class MyTaskComponent(TaskComponent):
-            name = "MyTask"
-            extension_point = ExtensionPoint.END_OF_CYCLE
-
-            def is_active(self, config):
-                return config.get("my_section.active", False)
-"""
+"""Optional components that can be plugged into extension points of a suite."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -38,15 +12,39 @@ from .base import EcflowNode, EcflowSuiteTask
 class ExtensionPoint(str, Enum):
     """Places in the suite where components can be added.
 
+    Nodes added at an extension point are waited for by the nodes that follow
+    it, unless noted otherwise.
+
     Attributes:
-        FORECAST_ARCHIVING: In the Forecast family, after ArchiveFDB. The trigger
-            is the node the archiving tasks should trigger on.
-        END_OF_CYCLE: In the time family of each cycle, after all members have
-            been added. The trigger is the list of member Cycle families.
+        STATIC_DATA: Where static data is produced, once for all members or
+            per member. Components are triggered when the static data is
+            available.
+        INPUT_DATA: Where the input data of a cycle is prepared. Components are
+            triggered when the cycle is prepared.
+        PRE_FORECAST: Before the forecast of a member. Components are triggered
+            when the forecast could start.
+        FORECAST_ARCHIVING: Where the forecast output of a member is archived.
+            Components are triggered when that output is available. Nothing
+            waits for them within the forecast.
+        POST_FORECAST: After the forecast of a member. Components are triggered
+            when the forecast output is available.
+        POST_CYCLE: After a member has completed the cycle, before its cycle
+            files are cleaned. Components start when the post-cycle work starts.
+        END_OF_CYCLE: After all members of a cycle. Components are triggered
+            when every member has completed the cycle. Nothing waits for them.
+        END_OF_SUITE: After all other work of the suite, before the final
+            checks and cleaning. Components are triggered when that work is
+            done.
     """
 
+    STATIC_DATA = "static_data.end"
+    INPUT_DATA = "input_data.end"
+    PRE_FORECAST = "cycle.pre_forecast"
     FORECAST_ARCHIVING = "forecast.archiving"
+    POST_FORECAST = "forecast.end"
+    POST_CYCLE = "post_cycle.end"
     END_OF_CYCLE = "time.end_of_cycle"
+    END_OF_SUITE = "suite.end"
 
 
 @dataclass
@@ -84,6 +82,10 @@ class SuiteComponent:
         Args:
             parent: Node to add the component nodes to.
             ctx: Context of the extension point.
+
+        Returns:
+            The node, or list of nodes, that later nodes should wait for, or
+            None if they should not wait for the component.
 
         Raises:
             NotImplementedError: Must be implemented by subclasses.
@@ -188,3 +190,27 @@ def add_components(
             )
             added.append(component.add_nodes(parent, ctx))
     return added
+
+
+def extend_trigger(trigger, added: list):
+    """Return ``trigger`` extended with the nodes added by components.
+
+    Args:
+        trigger: Trigger to extend, a node, a list of nodes or None.
+        added: Values returned by :func:`add_components`.
+
+    Returns:
+        ``trigger`` if no nodes were added, else a list of the trigger nodes
+        followed by the added nodes.
+    """
+    nodes = []
+    for value in added:
+        values = value if isinstance(value, list) else [value]
+        nodes.extend(node for node in values if isinstance(node, EcflowNode))
+    if not nodes:
+        return trigger
+    if trigger is None:
+        return nodes
+    if isinstance(trigger, list):
+        return [*trigger, *nodes]
+    return [trigger, *nodes]

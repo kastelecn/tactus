@@ -31,6 +31,7 @@ from tactus.suites.suite_extensions import (
     ComponentContext,
     ExtensionPoint,
     add_components,
+    extend_trigger,
 )
 from tactus.suites.suite_utils import Cycles, lbc_times_generator, slaf_planner
 from tactus.toolbox import Platform
@@ -451,6 +452,22 @@ class StaticDataTasks:
             )
             archive_static_member_trigger.append(generate_wfp_tabfile)
 
+        added = add_components(
+            ExtensionPoint.STATIC_DATA,
+            parent,
+            ComponentContext(
+                config,
+                task_settings,
+                input_template,
+                ecf_files,
+                trigger=list(archive_static_member_trigger),
+                ecf_files_remotely=ecf_files_remotely,
+            ),
+        )
+        archive_static_member_trigger = extend_trigger(
+            archive_static_member_trigger, added
+        )
+
         if (
             config["suite_control.do_archiving"]
             and config["suite_control.member_specific_static_data"]
@@ -708,6 +725,18 @@ class InputDataFamily(EcflowSuiteFamily):
             task_settings,
             ecf_files,
             input_template=input_template,
+        )
+        add_components(
+            ExtensionPoint.INPUT_DATA,
+            self,
+            ComponentContext(
+                config,
+                task_settings,
+                input_template,
+                ecf_files,
+                trigger=prepare_cycle,
+                ecf_files_remotely=ecf_files_remotely,
+            ),
         )
         marstype_list = ["all"]
         if config["suite_control.split_mars"]:
@@ -1463,6 +1492,19 @@ class ForecastFamily(EcflowSuiteFamily):
                 trigger=fdb_sqlite_trigger,
             )
 
+        add_components(
+            ExtensionPoint.POST_FORECAST,
+            self,
+            ComponentContext(
+                config,
+                task_settings,
+                input_template,
+                ecf_files,
+                trigger=fdb_sqlite_trigger,
+                ecf_files_remotely=ecf_files_remotely,
+            ),
+        )
+
 
 class CycleFamily(EcflowSuiteFamily):
     """Class for creating the Cycle ecFlow family."""
@@ -1517,6 +1559,20 @@ class CycleFamily(EcflowSuiteFamily):
         else:
             forecast_trigger = perturbation_family
 
+        added = add_components(
+            ExtensionPoint.PRE_FORECAST,
+            self,
+            ComponentContext(
+                config,
+                task_settings,
+                input_template,
+                ecf_files,
+                trigger=forecast_trigger,
+                ecf_files_remotely=ecf_files_remotely,
+            ),
+        )
+        forecast_trigger = extend_trigger(forecast_trigger, added)
+
         ForecastFamily(
             self,
             config,
@@ -1565,6 +1621,20 @@ class PostCycleFamily(EcflowSuiteFamily):
             )
             cleaning_triggers.append(archive_hour)
             collectlogs_triggers.append(archive_hour)
+
+        added = add_components(
+            ExtensionPoint.POST_CYCLE,
+            self,
+            ComponentContext(
+                config,
+                task_settings,
+                input_template,
+                ecf_files,
+                ecf_files_remotely=ecf_files_remotely,
+            ),
+        )
+        cleaning_triggers = extend_trigger(cleaning_triggers, added)
+        collectlogs_triggers = extend_trigger(collectlogs_triggers, added)
 
         if (
             config["suite_control.do_cleaning"]

@@ -9,12 +9,14 @@ import pytest
 from tactus.derived_variables import set_times
 from tactus.submission import TaskSettings
 from tactus.suites import suite_extensions
+from tactus.suites.base import EcflowNode
 from tactus.suites.suite_extensions import (
     ComponentContext,
     ExtensionPoint,
     SuiteComponent,
     TaskComponent,
     add_components,
+    extend_trigger,
     get_components,
     register_component,
 )
@@ -134,6 +136,35 @@ class TestAddComponents:
             SuiteComponent().add_nodes("parent", _ctx())
 
 
+class _Node(EcflowNode):
+    """Stand-in node, not added to any suite."""
+
+    def __init__(self, name):
+        self.name = name
+
+
+class TestExtendTrigger:
+    def test_nothing_added(self):
+        trigger = _Node("t")
+        assert extend_trigger(trigger, []) is trigger
+        assert extend_trigger(trigger, [None, "not a node"]) is trigger
+
+    def test_no_trigger(self):
+        added = _Node("a")
+        assert extend_trigger(None, [added]) == [added]
+
+    def test_node_trigger(self):
+        trigger, added = _Node("t"), _Node("a")
+        assert extend_trigger(trigger, [added]) == [trigger, added]
+
+    def test_list_trigger_and_list_added(self):
+        trigger = [_Node("t")]
+        added = [[_Node("a"), _Node("b")], None, _Node("c")]
+        result = extend_trigger(trigger, added)
+        assert [n.name for n in result] == ["t", "a", "b", "c"]
+        assert [n.name for n in trigger] == ["t"]
+
+
 @pytest.fixture
 def _no_parse_job_errors(monkeypatch):
     original = TaskSettings.parse_job
@@ -153,20 +184,35 @@ def test_components_in_suite(default_config, tmp_directory, monkeypatch):
 
     def add_nodes(self, parent, ctx):
         trigger = ctx.trigger if isinstance(ctx.trigger, list) else [ctx.trigger]
-        created.append((self.name, parent.name, sorted(n.name for n in trigger)))
+        created.append((
+            self.extension_point,
+            parent.name,
+            sorted(n.name for n in trigger if n is not None),
+        ))
         return original_add_nodes(self, parent, ctx)
 
     monkeypatch.setattr(TaskComponent, "add_nodes", add_nodes)
 
-    @register_component
-    class EndOfCycleTask(TaskComponent):
-        name = "EndOfCycleTask"
-        extension_point = ExtensionPoint.END_OF_CYCLE
+    triggers = {}
+    original_node_init = EcflowNode.__init__
 
-    @register_component
-    class ArchivingTask(TaskComponent):
-        name = "ArchivingTask"
-        extension_point = ExtensionPoint.FORECAST_ARCHIVING
+    def node_init(self, name, *args, trigger=None, **kwargs):
+        nodes = trigger if isinstance(trigger, list) else [trigger]
+        triggers.setdefault(name, []).append({
+            n.name for n in nodes if isinstance(n, EcflowNode)
+        })
+        original_node_init(self, name, *args, trigger=trigger, **kwargs)
+
+    monkeypatch.setattr(EcflowNode, "__init__", node_init)
+
+    for point in ExtensionPoint:
+        register_component(
+            type(
+                f"{point.name}Task",
+                (TaskComponent,),
+                {"name": f"{point.name}Task", "extension_point": point},
+            )
+        )
 
     @register_component
     class InactiveTask(TaskComponent):
@@ -201,13 +247,33 @@ def test_components_in_suite(default_config, tmp_directory, monkeypatch):
     config = config.copy(update=set_times(config))
     TactusSuiteDefinition(config, dry_run=True)
 
-    archiving = [c for c in created if c[0] == "ArchivingTask"]
-    end_of_cycle = [c for c in created if c[0] == "EndOfCycleTask"]
-    # Two cycles with two members each, each with a Forecast family
-    assert len(archiving) == 4
-    assert all(c[1] == "Forecasting" for c in archiving)
-    assert end_of_cycle == [
-        ("EndOfCycleTask", "0000", ["Cycle", "Cycle"]),
-        ("EndOfCycleTask", "0300", ["Cycle", "Cycle"]),
+    def placed(point):
+        return [(parent, trigger) for p, parent, trigger in created if p == point]
+
+    # Two cycles with two members each
+    assert placed(ExtensionPoint.STATIC_DATA) == [
+        ("StaticData", ["E923Monthly", "PgdUpdate"])
     ]
-    assert not [c for c in created if c[0] == "InactiveTask"]
+    assert placed(ExtensionPoint.INPUT_DATA) == [("InputData", ["PrepareCycle"])] * 2
+    assert (
+        placed(ExtensionPoint.PRE_FORECAST)
+        == [("Cycle", ["Interpolation"])] * 2
+        + [("Cycle", ["Cycle", "Interpolation"])] * 2
+    )
+    for point in (ExtensionPoint.FORECAST_ARCHIVING, ExtensionPoint.POST_FORECAST):
+        assert placed(point) == [("Forecasting", ["AddCalculatedFieldsTasks"])] * 4
+    assert placed(ExtensionPoint.POST_CYCLE) == [("PostCycle", [])] * 4
+    assert placed(ExtensionPoint.END_OF_CYCLE) == [
+        ("0000", ["Cycle", "Cycle"]),
+        ("0300", ["Cycle", "Cycle"]),
+    ]
+    assert placed(ExtensionPoint.END_OF_SUITE) == [
+        ("test_suite", ["0300", "CollectLogsStatic", "PrepRun"])
+    ]
+    assert "InactiveTask" not in triggers
+
+    # The nodes following an extension point wait for its components
+    assert all("PRE_FORECASTTask" in t for t in triggers["Forecasting"])
+    for name in ("CycleCleaning", "CollectLogsHour"):
+        assert all("POST_CYCLETask" in t for t in triggers[name])
+    assert all("END_OF_SUITETask" in t for t in triggers["PostMortem"])

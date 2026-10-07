@@ -29,12 +29,18 @@ In this case it is expected that the namespace "example" is located in `/tmp/exa
 ## Add optional components to the tactus suite
 Instead of writing a whole suite, a plug-in can add tasks or families to the tactus suite at extension points. A component is a class registered with `register_component` from `tactus.suites.suite_extensions`. It is added at its extension point if its `is_active(config)` returns True.
 
-The extension points are listed in `ExtensionPoint`:
+The extension points are listed in `ExtensionPoint`, in the order the suite reaches them:
 
-| Extension point | Where | Trigger given to the component |
-|---|---|---|
-| `ExtensionPoint.FORECAST_ARCHIVING` | Forecast family, after ArchiveFDB | The node archiving tasks should trigger on |
-| `ExtensionPoint.END_OF_CYCLE` | Time family of each cycle, after all members | The Cycle families of all members |
+| Extension point | Where | Components are triggered when | Waited for by |
+|---|---|---|---|
+| `ExtensionPoint.STATIC_DATA` | Where static data is produced, once or per member | The static data is available | The static data archiving and the time dependent part |
+| `ExtensionPoint.INPUT_DATA` | Where the input data of a cycle is prepared | The cycle is prepared | The rest of the cycle |
+| `ExtensionPoint.PRE_FORECAST` | Before the forecast of a member | The forecast could start | The forecast |
+| `ExtensionPoint.FORECAST_ARCHIVING` | Where the forecast output of a member is archived | The forecast output is available | The post cycle |
+| `ExtensionPoint.POST_FORECAST` | After the forecast of a member | The forecast output is available | The post cycle |
+| `ExtensionPoint.POST_CYCLE` | After a member has completed the cycle | The post cycle starts | Cleaning and log collection of the cycle |
+| `ExtensionPoint.END_OF_CYCLE` | After all members of a cycle | Every member has completed the cycle | Nothing |
+| `ExtensionPoint.END_OF_SUITE` | After all other work of the suite | That work is done | The final checks and cleaning |
 
 For a single task, subclass `TaskComponent`; the task gets the trigger of the extension point:
 
@@ -51,8 +57,8 @@ class MyTaskComponent(TaskComponent):
         return config.get("my_section.active", False)
 ```
 
-For anything else, subclass `SuiteComponent` and implement `add_nodes(parent, ctx)`, where `ctx` holds the config, task settings, templates and trigger.
+For anything else, subclass `SuiteComponent` and implement `add_nodes(parent, ctx)`, where `ctx` holds the config, task settings, templates and trigger. Return the node, or list of nodes, that the following nodes should wait for, or None.
 
 Put the component in a module of the plug-in's `suites` package: those modules are imported when tactus discovers suites, which registers the component. Registering a component with an unknown extension point raises a `ValueError`.
 
-A new extension point is added by adding it to `ExtensionPoint` and calling `add_components(ExtensionPoint.<NAME>, <parent node>, ComponentContext(...))` in the suite family where the components should be inserted.
+A new extension point is added by adding it to `ExtensionPoint` and calling `add_components(ExtensionPoint.<NAME>, <parent node>, ComponentContext(...))` in the suite family where the components should be inserted. Pass the returned values to `extend_trigger` to make the following nodes wait for the components.
