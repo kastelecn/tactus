@@ -27,6 +27,11 @@ from tactus.suites.base import (
     EcflowSuiteTriggers,
 )
 from tactus.suites.da_components import AssimilationFamily
+from tactus.suites.suite_extensions import (
+    ComponentContext,
+    ExtensionPoint,
+    add_components,
+)
 from tactus.suites.suite_utils import Cycles, lbc_times_generator, slaf_planner
 from tactus.toolbox import Platform
 
@@ -1434,19 +1439,18 @@ class ForecastFamily(EcflowSuiteFamily):
                 ecf_files_remotely=ecf_files_remotely,
             )
 
-        databridge_sel = config.get("archiving.DataBridge.fdb", {})
-        databridge_archiving_active = [v["active"] for v in databridge_sel.values()]
-        if any(databridge_archiving_active):
-            EcflowSuiteTask(
-                "ArchiveDataBridge",
-                self,
+        add_components(
+            ExtensionPoint.FORECAST_ARCHIVING,
+            self,
+            ComponentContext(
                 config,
                 task_settings,
+                input_template,
                 ecf_files,
-                input_template=input_template,
                 trigger=fdb_sqlite_trigger,
                 ecf_files_remotely=ecf_files_remotely,
-            )
+            ),
+        )
 
         if config["suite_control.do_extractsqlite"]:
             EcflowSuiteTask(
@@ -1644,10 +1648,7 @@ class PerturbationFamily(EcflowSuiteFamily):
 
 
 class TimeDependentFamily(EcflowSuiteFamily):
-    """Class for creating the time dependent part of a tactus suite.
-
-    Extra nodes per cycle can be added by overriding ``add_time_family_nodes``.
-    """
+    """Class for creating the time dependent part of a tactus suite."""
 
     def __init__(
         self,
@@ -1899,40 +1900,18 @@ class TimeDependentFamily(EcflowSuiteFamily):
                     ecf_files_remotely=ecf_files_remotely,
                 )
 
-            self.add_time_family_nodes(
+            add_components(
+                ExtensionPoint.END_OF_CYCLE,
                 time_family,
-                config,
-                task_settings,
-                input_template,
-                ecf_files,
-                member_cycle_families,
-                ecf_files_remotely=ecf_files_remotely,
+                ComponentContext(
+                    config,
+                    task_settings,
+                    input_template,
+                    ecf_files,
+                    trigger=member_cycle_families,
+                    ecf_files_remotely=ecf_files_remotely,
+                ),
             )
-
-    def add_time_family_nodes(
-        self,
-        time_family,
-        config,
-        task_settings: TaskSettings,
-        input_template,
-        ecf_files,
-        member_cycle_families: List[EcflowSuiteFamily],
-        ecf_files_remotely=None,
-    ):
-        """Add extra nodes to the time family of each cycle.
-
-        Called once per cycle after all member families have been created.
-        Does nothing by default; override in a subclass to add nodes.
-
-        Args:
-            time_family: The time family of the current cycle.
-            config: Experiment config.
-            task_settings: Submission configuration.
-            input_template: ecFlow job template.
-            ecf_files: Local ecf script path prefix.
-            member_cycle_families: The cycle families of all members.
-            ecf_files_remotely: Remote ecf script path prefix.
-        """
 
     @property
     def last_node(self):
