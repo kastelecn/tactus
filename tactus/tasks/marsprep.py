@@ -3,7 +3,6 @@
 import ast
 import contextlib
 import os
-from datetime import timedelta
 from functools import cached_property
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -230,19 +229,13 @@ class Marsprep(Task):
 
         request.add_database_options()
 
-        # ClimateDT (stream CLTE) files read from disk keep their climate-dt keys:
-        # valid time in DATE/TIME and no STEP
+        # ClimateDT (stream CLTE) files read from disk keep their climate-dt keys.
+        # STEP is not a MARS key for CLTE, so it is dropped; the files carry base time
+        # + step (as IFS/C903 requires) and each request reads one file (SOURCE).
         if not prefetch and str(request.request["STREAM"]).upper() == "CLTE":
-            steps = str(request.request.pop("STEP")).split("/")
-            if len(steps) != 1:
-                raise ValueError(f"ClimateDT: one step per request expected: {steps}")
-            validtime = self.boundary.bd_basetime + timedelta(hours=int(steps[0]))
+            request.request.pop("STEP", None)
             request.request.pop("DATABASE", None)
-            request.update_request({
-                "DATE": validtime.strftime("%Y%m%d"),
-                "TIME": validtime.strftime("%H%M"),
-                "DATASET": "climate-dt",
-            })
+            request.update_request({"DATASET": "climate-dt"})
 
         if specify_domain:
             request.update_request({
